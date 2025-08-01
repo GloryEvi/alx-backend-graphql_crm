@@ -1,26 +1,71 @@
 import graphene
 from graphene_django import DjangoObjectType
+from graphene_django.filter import DjangoFilterConnectionField
 from django.core.exceptions import ValidationError
 from decimal import Decimal
 from .models import Customer, Product, Order
+from .filters import CustomerFilter, ProductFilter, OrderFilter
 
 # GraphQL Types
 class CustomerType(DjangoObjectType):
     class Meta:
         model = Customer
         fields = '__all__'
+        filter_fields = {
+            'name': ['exact', 'icontains'],
+            'email': ['exact', 'icontains'],
+            'created_at': ['exact', 'gte', 'lte'],
+        }
+        interfaces = (graphene.relay.Node,)
 
 class ProductType(DjangoObjectType):
     class Meta:
         model = Product
         fields = '__all__'
+        filter_fields = {
+            'name': ['exact', 'icontains'],
+            'price': ['exact', 'gte', 'lte'],
+            'stock': ['exact', 'gte', 'lte'],
+        }
+        interfaces = (graphene.relay.Node,)
 
 class OrderType(DjangoObjectType):
     class Meta:
         model = Order
         fields = '__all__'
+        filter_fields = {
+            'total_amount': ['exact', 'gte', 'lte'],
+            'order_date': ['exact', 'gte', 'lte'],
+            'customer__name': ['exact', 'icontains'],
+        }
+        interfaces = (graphene.relay.Node,)
 
-# Input Types
+# Input Types for Filters
+class CustomerFilterInput(graphene.InputObjectType):
+    name_icontains = graphene.String()
+    email_icontains = graphene.String()
+    created_at_gte = graphene.DateTime()
+    created_at_lte = graphene.DateTime()
+    phone_pattern = graphene.String()
+
+class ProductFilterInput(graphene.InputObjectType):
+    name_icontains = graphene.String()
+    price_gte = graphene.Float()
+    price_lte = graphene.Float()
+    stock_gte = graphene.Int()
+    stock_lte = graphene.Int()
+    low_stock = graphene.Boolean()
+
+class OrderFilterInput(graphene.InputObjectType):
+    total_amount_gte = graphene.Float()
+    total_amount_lte = graphene.Float()
+    order_date_gte = graphene.DateTime()
+    order_date_lte = graphene.DateTime()
+    customer_name = graphene.String()
+    product_name = graphene.String()
+    product_id = graphene.Int()
+
+# Input Types for Mutations
 class CustomerInput(graphene.InputObjectType):
     name = graphene.String(required=True)
     email = graphene.String(required=True)
@@ -28,7 +73,7 @@ class CustomerInput(graphene.InputObjectType):
 
 class ProductInput(graphene.InputObjectType):
     name = graphene.String(required=True)
-    price = graphene.String(required=True)  # Using String to handle decimal properly
+    price = graphene.String(required=True)
     stock = graphene.Int()
 
 class OrderInput(graphene.InputObjectType):
@@ -36,7 +81,7 @@ class OrderInput(graphene.InputObjectType):
     product_ids = graphene.List(graphene.ID, required=True)
     order_date = graphene.DateTime()
 
-# Mutations
+# Mutations 
 class CreateCustomer(graphene.Mutation):
     class Arguments:
         input = CustomerInput(required=True)
@@ -46,7 +91,6 @@ class CreateCustomer(graphene.Mutation):
     
     def mutate(self, info, input):
         try:
-            # Check email uniqueness
             if Customer.objects.filter(email=input.email).exists():
                 return CreateCustomer(customer=None, message="Email already exists")
             
@@ -55,7 +99,7 @@ class CreateCustomer(graphene.Mutation):
                 email=input.email,
                 phone=input.get('phone', '')
             )
-            customer.full_clean()  # Validates phone format
+            customer.full_clean()
             customer.save()
             
             return CreateCustomer(customer=customer, message="Customer created successfully")
@@ -103,7 +147,6 @@ class CreateProduct(graphene.Mutation):
     
     def mutate(self, info, input):
         try:
-            # Convert and validate price
             try:
                 price = Decimal(input.price)
             except:
@@ -112,7 +155,6 @@ class CreateProduct(graphene.Mutation):
             if price <= 0:
                 return CreateProduct(product=None, message="Price must be positive")
             
-            # Validate stock
             stock = input.get('stock', 0)
             if stock < 0:
                 return CreateProduct(product=None, message="Stock cannot be negative")
@@ -137,13 +179,11 @@ class CreateOrder(graphene.Mutation):
     
     def mutate(self, info, input):
         try:
-            # Validate customer exists
             try:
                 customer = Customer.objects.get(pk=input.customer_id)
             except Customer.DoesNotExist:
                 return CreateOrder(order=None, message="Invalid customer ID")
             
-            # Validate products exist and at least one is provided
             if not input.product_ids:
                 return CreateOrder(order=None, message="At least one product must be provided")
             
@@ -155,10 +195,8 @@ class CreateOrder(graphene.Mutation):
                 except Product.DoesNotExist:
                     return CreateOrder(order=None, message=f"Invalid product ID: {product_id}")
             
-            # Calculate total amount
             total_amount = sum(product.price for product in products)
             
-            # Create order
             order = Order(
                 customer=customer,
                 total_amount=total_amount
@@ -170,23 +208,34 @@ class CreateOrder(graphene.Mutation):
         except Exception as e:
             return CreateOrder(order=None, message=f"Error: {str(e)}")
 
-# Query Class
+# Query Class with Filters
 class Query(graphene.ObjectType):
-    all_customers = graphene.List(CustomerType)
-    all_products = graphene.List(ProductType)
-    all_orders = graphene.List(OrderType)
+    # Connection fields for filtering and pagination
+    all_customers = DjangoFilterConnectionField(CustomerType)
+    all_products = DjangoFilterConnectionField(ProductType)
+    all_orders = DjangoFilterConnectionField(OrderType)
+    
+    # Basic single object queries
     customer = graphene.Field(CustomerType, id=graphene.Int(required=True))
     product = graphene.Field(ProductType, id=graphene.Int(required=True))
     order = graphene.Field(OrderType, id=graphene.Int(required=True))
     
-    def resolve_all_customers(self, info):
-        return Customer.objects.all()
-    
-    def resolve_all_products(self, info):
-        return Product.objects.all()
-    
-    def resolve_all_orders(self, info):
-        return Order.objects.all()
+    # Custom filtered queries with ordering
+    customers_filtered = graphene.List(
+        CustomerType,
+        filter=CustomerFilterInput(),
+        order_by=graphene.String()
+    )
+    products_filtered = graphene.List(
+        ProductType,
+        filter=ProductFilterInput(),
+        order_by=graphene.String()
+    )
+    orders_filtered = graphene.List(
+        OrderType,
+        filter=OrderFilterInput(),
+        order_by=graphene.String()
+    )
     
     def resolve_customer(self, info, id):
         try:
@@ -205,6 +254,42 @@ class Query(graphene.ObjectType):
             return Order.objects.get(pk=id)
         except Order.DoesNotExist:
             return None
+    
+    def resolve_customers_filtered(self, info, filter=None, order_by=None):
+        queryset = Customer.objects.all()
+        
+        if filter:
+            customer_filter = CustomerFilter(filter, queryset=queryset)
+            queryset = customer_filter.qs
+        
+        if order_by:
+            queryset = queryset.order_by(order_by)
+        
+        return queryset
+    
+    def resolve_products_filtered(self, info, filter=None, order_by=None):
+        queryset = Product.objects.all()
+        
+        if filter:
+            product_filter = ProductFilter(filter, queryset=queryset)
+            queryset = product_filter.qs
+        
+        if order_by:
+            queryset = queryset.order_by(order_by)
+        
+        return queryset
+    
+    def resolve_orders_filtered(self, info, filter=None, order_by=None):
+        queryset = Order.objects.all()
+        
+        if filter:
+            order_filter = OrderFilter(filter, queryset=queryset)
+            queryset = order_filter.qs
+        
+        if order_by:
+            queryset = queryset.order_by(order_by)
+        
+        return queryset
 
 # Mutation Class
 class Mutation(graphene.ObjectType):
