@@ -11,7 +11,6 @@ DELETED_COUNT=$(python manage.py shell -c "
 from django.utils import timezone
 from datetime import timedelta
 from crm.models import Customer
-import sys
 
 # Calculate date one year ago
 one_year_ago = timezone.now() - timedelta(days=365)
@@ -29,7 +28,7 @@ if count > 0:
     inactive_customers.delete()
 
 # Print only the count
-sys.stdout.write(str(count))
+print(count)
 " 2>/dev/null | tail -1)
 
 # Log the result
