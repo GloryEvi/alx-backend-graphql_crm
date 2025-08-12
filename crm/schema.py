@@ -6,6 +6,7 @@ from decimal import Decimal
 from .models import Customer, Product, Order
 from .filters import CustomerFilter, ProductFilter, OrderFilter
 
+
 # GraphQL Types
 class CustomerType(DjangoObjectType):
     class Meta:
@@ -297,3 +298,35 @@ class Mutation(graphene.ObjectType):
     bulk_create_customers = BulkCreateCustomers.Field()
     create_product = CreateProduct.Field()
     create_order = CreateOrder.Field()
+
+class UpdateLowStockProducts(graphene.Mutation):
+    class Arguments:
+        pass
+    
+    success = graphene.Boolean()
+    message = graphene.String()
+    updated_products = graphene.List(ProductType)
+    
+    def mutate(self, info):
+        # Query products with stock < 10
+        low_stock_products = Product.objects.filter(stock__lt=10)
+        updated_products = []
+        
+        # Update each low stock product by adding 10 to stock
+        for product in low_stock_products:
+            product.stock += 10
+            product.save()
+            updated_products.append(product)
+        
+        return UpdateLowStockProducts(
+            success=True,
+            message=f"Updated {len(updated_products)} low-stock products",
+            updated_products=updated_products
+        )
+
+
+class Mutation(graphene.ObjectType):
+    update_low_stock_products = UpdateLowStockProducts.Field()
+
+
+schema = graphene.Schema(query=Query, mutation=Mutation)
